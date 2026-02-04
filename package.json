@@ -1,0 +1,42 @@
+{
+  "name": "jules-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Google Jules - Asynchronous AI Coding Agent",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "jules-mcp-server": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "dev": "node --loader ts-node/esm src/cli.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "jules",
+    "google",
+    "ai",
+    "coding-agent"
+  ],
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "dotenv": "^16.4.0",
+    "@google/jules-sdk": "^0.0.4",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.2",
+    "@inquirer/prompts": "^7.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0",
+    "ts-node": "^10.9.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "type": "module"
+}
