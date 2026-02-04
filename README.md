@@ -1,6 +1,6 @@
 # Jules MCP Server
 
-MCP server that exposes Google Jules capabilities using **@google/jules-sdk**. This server implements the same tool set as the official Jules MCP toolkit, with SDK-backed caching, snapshots, and artifact handling.
+MCP server that exposes Google Jules capabilities using **@google/jules-sdk**. This unified implementation uses the SDK plus direct API calls where needed, while keeping SDK-backed caching, snapshots, and artifact handling. MCP tools may use either the SDK or the REST API, whichever is the best fit for the specific operation.
 
 ## Setup
 
@@ -38,89 +38,36 @@ This repo includes a project-level OpenCode config at `.opencode/opencode.json`.
 }
 ```
 
-## Tools (SDK Parity)
+## Antigravity Integration
 
-These are the **SDK-parity tools** exposed by this MCP server (SDK-style names).
+Example OpenCode plugin enablement snippet (merge into your config):
 
-**`create_session`**
-Creates a new Jules session or automated run (supports repoless sessions).
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": {
+    "opencode-antigravity-auth": {
+      "enabled": true
+    }
+  }
+}
+```
 
-Parameters:
-- `prompt` (string, required)
-- `repo` (string, optional, `owner/repo`)
-- `branch` (string, optional)
-- `interactive` (boolean, optional, waits for plan approval)
-- `autoPr` (boolean, optional, default true)
+## Tools
 
-Returns: `Session created. ID: <sessionId>`
+### SDK Tools
 
-**`list_sessions`**
-Lists recent sessions with pagination.
+| Tool | Purpose | Key Params | Returns |
+| --- | --- | --- | --- |
+| `create_session` | Create a new Jules session or automated run (supports repoless sessions). | `prompt` (req)<br>`repo`<br>`branch`<br>`interactive`<br>`autoPr` | `Session created. ID: <sessionId>` |
+| `list_sessions` | List recent sessions with pagination. | `pageSize`<br>`pageToken` | `{ sessions: [...], nextPageToken? }` |
+| `get_session_state` | Session dashboard (status, last activity/message, pending plan). | `sessionId` (req) | Status object with activity/message/plan context |
+| `send_reply_to_session` | Approve plan, send a message, or ask and wait for a reply. | `sessionId` (req)<br>`action` (approve/send/ask)<br>`message` (send/ask) | Confirmation or agent reply |
+| `get_code_review_context` | Summarize code changes with file list and metadata. | `sessionId` (req)<br>`activityId`<br>`format`<br>`filter`<br>`detail` | Formatted summary string |
+| `show_code_diff` | Get the unified diff for a session or file. | `sessionId` (req)<br>`file`<br>`activityId` | Unified diff text |
+| `query_cache` | Query the local cache using JQL. | `query` (req) | `{ results: [...], _meta? }` |
 
-Parameters:
-- `pageSize` (number, optional, default 10)
-- `pageToken` (string, optional)
-
-Returns: `{ sessions: [...], nextPageToken?: string }`
-
-**`get_session_state`**
-Session dashboard for status and next actions.
-
-Parameters:
-- `sessionId` (string, required)
-
-Returns: session state, last activity, last agent message, and pending plan (if any).
-
-**`send_reply_to_session`**
-Approve plan, send a message, or ask and wait for a reply.
-
-Parameters:
-- `sessionId` (string, required)
-- `action` (string, required, `approve` | `send` | `ask`)
-- `message` (string, required for `send` and `ask`)
-
-Returns: confirmation or agent reply.
-
-**`get_code_review_context`**
-Summarizes code changes (uses snapshots or activity aggregation depending on session state).
-
-Parameters:
-- `sessionId` (string, required)
-- `activityId` (string, optional)
-- `format` (string, optional, `summary` | `tree` | `detailed` | `markdown`)
-- `filter` (string, optional, `all` | `created` | `modified` | `deleted`)
-- `detail` (string, optional, `minimal` | `standard` | `full`)
-
-Returns: formatted summary (string).
-
-**`show_code_diff`**
-Returns unified diff for a session or a specific file/activity.
-
-Parameters:
-- `sessionId` (string, required)
-- `file` (string, optional)
-- `activityId` (string, optional)
-
-Returns: unified diff text (string).
-
-**`query_cache`**
-Queries the local cache using JQL and optional token budget trimming.
-
-Parameters:
-- `query` (object, required)
-
-Query fields:
-- `from` (string, required, `sessions` | `activities`)
-- `select` (array of strings, optional)
-- `where` (object, optional)
-- `limit` (number, optional)
-- `offset` (number, optional)
-- `include` (object, optional)
-- `tokenBudget` (number, optional)
-
-Returns: `{ results: [...], _meta?: { truncated, tokenCount, tokenBudget } }`
-
-Example:
+Query example:
 ```json
 {
   "query": {
@@ -131,173 +78,40 @@ Example:
 }
 ```
 
-## Compatibility Tools (`jules_*`)
+### Additional Tools (`jules_*`)
 
-These tools restore the earlier REST-style names for compatibility. They return a structured `ToolResult` object:
+These tools are part of the same unified server and expose REST-style workflows plus convenience operations. They may use the SDK or the REST API under the hood, depending on which path is required for the operation. They return a structured `ToolResult` object:
 
 ```
 { success, message, data?, error?, suggestedNextSteps? }
 ```
 
-**`jules_list_sources`**
-Lists all GitHub repositories connected to Jules.
+| Tool | Purpose | Key Params | Notes |
+| --- | --- | --- | --- |
+| `jules_list_sources` | List connected repositories. | `pageSize`<br>`pageToken` | Returns `{ sources, hasMore, nextPageToken }` |
+| `jules_get_source` | Get details for a connected repository. | `source` (req) | Accepts `sources/github/owner/repo` or `owner/repo` |
+| `jules_create_session` | Create a session with automation settings. | `prompt` (req)<br>`repo` (req)<br>`branch`<br>`title`<br>`automationMode`<br>`requirePlanApproval` | Draft PR uses REST API when requested |
+| `jules_get_session` | Get session status/details. | `sessionId` (req) | — |
+| `jules_list_sessions` | List sessions with pagination. | `pageSize`<br>`pageToken` | — |
+| `jules_approve_plan` | Approve a pending plan. | `sessionId` (req) | — |
+| `jules_reject_plan` | Reject a plan with feedback. | `sessionId` (req)<br>`feedback` | Uses REST API | 
+| `jules_send_message` | Send a message to a session. | `sessionId` (req)<br>`message` (req) | — |
+| `jules_cancel_session` | Cancel a running session. | `sessionId` (req) | Uses REST API |
+| `jules_list_activities` | List activities in a session. | `sessionId` (req)<br>`pageSize`<br>`pageToken` | — |
+| `jules_get_latest_activity` | Get most recent activity. | `sessionId` (req) | — |
+| `jules_get_session_plan` | Get latest plan (if generated). | `sessionId` (req) | Plan rejection detection uses REST activity listing |
+| `jules_wait_for_completion` | Wait for completion or timeout. | `sessionId` (req)<br>`timeoutMs`<br>`pollIntervalMs` | — |
+| `jules_wait_for_plan` | Wait for plan generation. | `sessionId` (req)<br>`timeoutMs` | — |
+| `jules_create_and_wait` | Create and optionally wait for completion. | `prompt` (req)<br>`repo` (req)<br>`branch`<br>`title`<br>`automationMode`<br>`waitForCompletion`<br>`timeoutMs`<br>`requirePlanApproval` | Draft PR uses REST API when requested |
+| `jules_quick_task` | Create session with defaults and wait. | `prompt` (req)<br>`repo` (req)<br>`branch`<br>`createPr` | — |
+| `jules_get_session_summary` | Combined session + activity summary. | `sessionId` (req) | — |
+| `jules_sync_local_codebase` | Apply Jules diff to a local git repo. | `sessionId` (req)<br>`repoPath`<br>`activityId`<br>`file`<br>`dryRun`<br>`allowDirty`<br>`autoStash`<br>`threeWay` | Auto-stash on dirty trees unless `allowDirty=true` or `autoStash=false` |
 
-Parameters:
-- `pageSize` (number, optional)
-- `pageToken` (string, optional; offset)
+### Hidden Tool (Not Listed in MCP)
 
-Returns: `{ sources: [...], hasMore, nextPageToken }`
-
-**`jules_get_source`**
-Gets details about a specific connected repository.
-
-Parameters:
-- `source` (string, required; `sources/github/owner/repo` or `owner/repo`)
-
-Returns: source details.
-
-**`jules_create_session`**
-Creates a new Jules session (compatibility schema).
-
-Parameters:
-- `prompt` (string, required)
-- `repo` (string, required)
-- `branch` (string, optional, default `main`)
-- `title` (string, optional)
-- `automationMode` (string, optional: `AUTOMATION_MODE_UNSPECIFIED` | `AUTO_CREATE_PR` | `AUTO_CREATE_DRAFT_PR`)
-- `requirePlanApproval` (boolean, optional)
-
-Notes:
-- `AUTO_CREATE_DRAFT_PR` falls back to `AUTO_CREATE_PR` in the SDK.
-
-**`jules_get_session`**
-Gets current status and details for a session.
-
-Parameters:
-- `sessionId` (string, required)
-
-**`jules_list_sessions`**
-Lists sessions with pagination.
-
-Parameters:
-- `pageSize` (number, optional)
-- `pageToken` (string, optional)
-
-**`jules_approve_plan`**
-Approves a pending plan.
-
-Parameters:
-- `sessionId` (string, required)
-
-**`jules_reject_plan`**
-Rejects a plan with optional feedback.
-
-Parameters:
-- `sessionId` (string, required)
-- `feedback` (string, optional)
-
-**`jules_send_message`**
-Sends a message to an active session.
-
-Parameters:
-- `sessionId` (string, required)
-- `message` (string, required)
-
-**`jules_cancel_session`**
-Cancels a running session.
-
-Parameters:
-- `sessionId` (string, required)
-
-**`jules_list_activities`**
-Lists activities in a session.
-
-Parameters:
-- `sessionId` (string, required)
-- `pageSize` (number, optional)
-- `pageToken` (string, optional)
-
-**`jules_get_latest_activity`**
-Gets the latest activity for a session.
-
-Parameters:
-- `sessionId` (string, required)
-
-**`jules_get_session_plan`**
-Gets the latest plan (if generated).
-
-Parameters:
-- `sessionId` (string, required)
-
-**`jules_wait_for_completion`**
-Blocks until the session completes or times out.
-
-Parameters:
-- `sessionId` (string, required)
-- `timeoutMs` (number, optional)
-- `pollIntervalMs` (number, optional)
-
-**`jules_wait_for_plan`**
-Blocks until a plan is generated or times out.
-
-Parameters:
-- `sessionId` (string, required)
-- `timeoutMs` (number, optional)
-
-**`jules_create_and_wait`**
-Creates a session and optionally waits for completion.
-
-Parameters:
-- `prompt` (string, required)
-- `repo` (string, required)
-- `branch` (string, optional)
-- `title` (string, optional)
-- `automationMode` (string, optional)
-- `waitForCompletion` (boolean, optional, default true)
-- `timeoutMs` (number, optional)
-- `requirePlanApproval` (boolean, optional)
-
-**`jules_quick_task`**
-Creates a session with defaults and waits for completion.
-
-Parameters:
-- `prompt` (string, required)
-- `repo` (string, required)
-- `branch` (string, optional)
-- `createPr` (boolean, optional, default true)
-
-**`jules_get_session_summary`**
-Returns a combined summary (session + activities + plan + errors).
-
-Parameters:
-- `sessionId` (string, required)
-
-**`jules_sync_local_codebase`**
-Applies the latest Jules diff to a local git working tree.
-
-Parameters:
-- `sessionId` (string, required)
-- `repoPath` (string, optional, default `cwd`)
-- `activityId` (string, optional)
-- `file` (string, optional)
-- `dryRun` (boolean, optional)
-- `allowDirty` (boolean, optional)
-- `threeWay` (boolean, optional)
-
-Notes:
-- Uses `git apply` under the hood. Requires a git repo.
-- By default refuses to apply on a dirty working tree unless `allowDirty=true`.
-
-## Hidden Tool (Not Listed in MCP)
-
-**`get_bash_outputs`**
-Private tool for bash output artifacts. Not listed in MCP tool discovery.
-
-Parameters:
-- `sessionId` (string, required)
-- `activityIds` (array of strings, optional)
-
-Returns: list of bash outputs + summary.
+| Tool | Purpose | Key Params | Notes |
+| --- | --- | --- | --- |
+| `get_bash_outputs` | Get bash command outputs from a session. | `sessionId` (req)<br>`activityIds` | Not listed in MCP discovery |
 
 ## Configuration
 

@@ -9,7 +9,7 @@ export interface JulesTool {
 }
 
 export function defineTool(tool: JulesTool): JulesTool {
-  return { ...tool, private: false };
+  return { ...tool, private: tool.private ?? false };
 }
 
 export function toMcpResponse(data: unknown): {

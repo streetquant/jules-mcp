@@ -306,20 +306,43 @@ const createAndWaitTool = defineTool({
         autoPr = true;
       }
 
-      const result = await createSession(client, {
-        prompt,
-        repo: normalizedRepo,
-        branch,
-        interactive: requirePlanApproval,
-        autoPr,
-        title: args?.title as string | undefined,
-      });
+      let sessionId: string;
+      if (automationMode === 'AUTO_CREATE_DRAFT_PR') {
+        const restClient = getJulesRestClient();
+        const response = await restClient.request<any>('sessions', {
+          method: 'POST',
+          body: {
+            prompt,
+            sourceContext: {
+              source: `sources/github/${normalizedRepo}`,
+              githubRepoContext: { startingBranch: branch },
+            },
+            title: args?.title as string | undefined,
+            automationMode: 'AUTO_CREATE_DRAFT_PR',
+            requirePlanApproval,
+          },
+        });
+        sessionId = response.id ?? response.name?.replace(/^sessions\//, '');
+        if (!sessionId) {
+          throw new Error('Failed to parse session ID from API response');
+        }
+      } else {
+        const result = await createSession(client, {
+          prompt,
+          repo: normalizedRepo,
+          branch,
+          interactive: requirePlanApproval,
+          autoPr,
+          title: args?.title as string | undefined,
+        });
+        sessionId = result.id;
+      }
 
       if (!waitForCompletion) {
-        const session = await client.session(result.id).info();
+        const session = await client.session(sessionId).info();
         return toMcpResponse(
           success(
-            `Session created: ${result.id}. Not waiting for completion.`,
+            `Session created: ${sessionId}. Not waiting for completion.`,
             { session: formatSession(session), waited: false },
             getSuggestedNextSteps(session),
           ),
@@ -331,7 +354,7 @@ const createAndWaitTool = defineTool({
           ? args.timeoutMs
           : resolveMaxDurationMs(600000);
 
-      const waitResult = await waitForSessionCompletion(client, result.id, {
+      const waitResult = await waitForSessionCompletion(client, sessionId, {
         intervalMs: resolvePollingInterval(),
         maxDurationMs: timeoutMs,
       });
@@ -351,7 +374,7 @@ const createAndWaitTool = defineTool({
       if (waitResult.success) {
         return toMcpResponse(
           success(
-            `Session ${result.id} completed with state: ${waitResult.value.state}`,
+            `Session ${sessionId} completed with state: ${waitResult.value.state}`,
             {
               session: formatted,
               waited: true,
@@ -367,7 +390,7 @@ const createAndWaitTool = defineTool({
 
       return toMcpResponse(
         success(
-          `Session ${result.id} created but timed out waiting (current state: ${waitResult.value.state})`,
+          `Session ${sessionId} created but timed out waiting (current state: ${waitResult.value.state})`,
           {
             session: formatted,
             waited: true,
@@ -621,6 +644,11 @@ const syncLocalCodebaseTool = defineTool({
         type: 'boolean',
         description: 'Allow applying on a dirty working tree',
       },
+      autoStash: {
+        type: 'boolean',
+        description:
+          'If true, stashes local changes before applying and restores afterward (default: true)',
+      },
       threeWay: {
         type: 'boolean',
         description: 'Attempt a 3-way apply (git apply --3way)',
@@ -629,6 +657,8 @@ const syncLocalCodebaseTool = defineTool({
     required: ['sessionId'],
   },
   handler: async (client: JulesClient, args: any) => {
+    let stashed = false;
+    let stashRestoreError: string | null = null;
     try {
       const sessionId = args?.sessionId as string;
       if (!sessionId) {
@@ -650,15 +680,28 @@ const syncLocalCodebaseTool = defineTool({
       await runGit(repoPath, ['rev-parse', '--show-toplevel']);
 
       const allowDirty = Boolean(args?.allowDirty);
+      const autoStash = args?.autoStash !== false;
+      stashed = false;
+      stashRestoreError = null;
       if (!allowDirty) {
         const status = await runGit(repoPath, ['status', '--porcelain']);
         if (status.stdout.trim().length > 0) {
-          return toMcpResponse(
-            failure(
-              'Working tree is not clean. Commit or stash changes, or set allowDirty=true.',
-              'SYNC_CODEBASE_DIRTY',
-            ),
-          );
+          if (!autoStash) {
+            return toMcpResponse(
+              failure(
+                'Working tree is not clean. Commit or stash changes, or set allowDirty=true.',
+                'SYNC_CODEBASE_DIRTY',
+              ),
+            );
+          }
+          await runGit(repoPath, [
+            'stash',
+            'push',
+            '-u',
+            '-m',
+            `jules-sync-${Date.now()}`,
+          ]);
+          stashed = true;
         }
       }
 
@@ -668,6 +711,22 @@ const syncLocalCodebaseTool = defineTool({
       });
 
       if (!diff.unidiffPatch) {
+        if (stashed) {
+          try {
+            await runGit(repoPath, ['stash', 'pop']);
+          } catch (error) {
+            stashRestoreError =
+              error instanceof Error ? error.message : 'Failed to restore stash';
+          }
+        }
+        if (stashRestoreError) {
+          return toMcpResponse(
+            failure(
+              `No diff to apply, but restoring stash failed: ${stashRestoreError}`,
+              'SYNC_CODEBASE_ERROR',
+            ),
+          );
+        }
         return toMcpResponse(
           success('No diff available to apply.', {
             sessionId,
@@ -696,11 +755,39 @@ const syncLocalCodebaseTool = defineTool({
         await runGit(repoPath, [...applyArgs.slice(0, -1), '--check', patchPath]);
       } catch (error) {
         await fs.unlink(patchPath).catch(() => undefined);
+        if (stashed) {
+          try {
+            await runGit(repoPath, ['stash', 'pop']);
+          } catch (restoreError) {
+            stashRestoreError =
+              restoreError instanceof Error
+                ? restoreError.message
+                : 'Failed to restore stash';
+          }
+        }
         throw error;
       }
 
       if (args?.dryRun) {
         await fs.unlink(patchPath).catch(() => undefined);
+        if (stashed) {
+          try {
+            await runGit(repoPath, ['stash', 'pop']);
+          } catch (restoreError) {
+            stashRestoreError =
+              restoreError instanceof Error
+                ? restoreError.message
+                : 'Failed to restore stash';
+          }
+        }
+        if (stashRestoreError) {
+          return toMcpResponse(
+            failure(
+              `Patch check succeeded, but restoring stash failed: ${stashRestoreError}`,
+              'SYNC_CODEBASE_ERROR',
+            ),
+          );
+        }
         return toMcpResponse(
           success('Patch applies cleanly (dry run).', {
             sessionId,
@@ -716,6 +803,26 @@ const syncLocalCodebaseTool = defineTool({
       await runGit(repoPath, applyArgs);
       await fs.unlink(patchPath).catch(() => undefined);
 
+      if (stashed) {
+        try {
+          await runGit(repoPath, ['stash', 'pop']);
+        } catch (restoreError) {
+          stashRestoreError =
+            restoreError instanceof Error
+              ? restoreError.message
+              : 'Failed to restore stash';
+        }
+      }
+
+      if (stashRestoreError) {
+        return toMcpResponse(
+          failure(
+            `Patch applied, but restoring stash failed: ${stashRestoreError}`,
+            'SYNC_CODEBASE_ERROR',
+          ),
+        );
+      }
+
       return toMcpResponse(
         success('Patch applied to local codebase.', {
           sessionId,
@@ -726,6 +833,14 @@ const syncLocalCodebaseTool = defineTool({
         }),
       );
     } catch (error) {
+      if (stashRestoreError) {
+        return toMcpResponse(
+          failure(
+            `Sync failed and stash restore also failed: ${stashRestoreError}`,
+            'SYNC_CODEBASE_ERROR',
+          ),
+        );
+      }
       return toMcpResponse(
         failure(
           error instanceof Error ? error.message : 'Failed to sync codebase',
