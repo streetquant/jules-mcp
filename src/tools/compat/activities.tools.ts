@@ -1,5 +1,6 @@
 import type { Activity, JulesClient } from '@google/jules-sdk';
 import { defineTool, toMcpResponse } from '../utils.js';
+import { getJulesRestClient } from '../../jules-client.js';
 import {
   success,
   failure,
@@ -8,6 +9,29 @@ import {
   findLatestActivityOfType,
   type ToolResult,
 } from './utils.js';
+
+async function findPlanRejected(
+  restClient: ReturnType<typeof getJulesRestClient>,
+  sessionId: string,
+): Promise<{ id: string } | null> {
+  let pageToken: string | undefined;
+  for (let i = 0; i < 5; i += 1) {
+    const response = await restClient.request<any>(`sessions/${sessionId}/activities`, {
+      query: { pageSize: 100, pageToken },
+    });
+    const activities: any[] = response.activities ?? [];
+    const rejected = activities.find(
+      (activity) =>
+        activity.type === 'planRejected' || activity.type === 'PLAN_REJECTED',
+    );
+    if (rejected) {
+      return { id: rejected.id ?? rejected.name ?? '' };
+    }
+    pageToken = response.nextPageToken;
+    if (!pageToken) break;
+  }
+  return null;
+}
 
 const listActivitiesTool = defineTool({
   name: 'jules_list_activities',
@@ -197,9 +221,8 @@ const getSessionPlanTool = defineTool({
       const approvalActivity = allActivities.find(
         (a) => a.type === 'planApproved',
       );
-      const rejectionActivity = allActivities.find(
-        (a) => (a as any).type === 'planRejected',
-      );
+      const restClient = getJulesRestClient();
+      const rejectionActivity = await findPlanRejected(restClient, sessionId);
 
       let status = 'pending_approval';
       if (approvalActivity) status = 'approved';

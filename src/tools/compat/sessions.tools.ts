@@ -2,6 +2,7 @@ import type { JulesClient } from '@google/jules-sdk';
 import { createSession } from '../../functions/create-session.js';
 import { listSessions } from '../../functions/list-sessions.js';
 import { defineTool, toMcpResponse } from '../utils.js';
+import { getJulesRestClient } from '../../jules-client.js';
 import {
   success,
   failure,
@@ -62,30 +63,50 @@ const createSessionTool = defineTool({
       const requirePlanApproval = Boolean(args?.requirePlanApproval);
 
       let autoPr: boolean | undefined = false;
-      let warnings: string[] = [];
       if (automationMode) {
         if (automationMode === 'AUTOMATION_MODE_UNSPECIFIED') {
           autoPr = false;
         } else if (automationMode === 'AUTO_CREATE_DRAFT_PR') {
           autoPr = true;
-          warnings.push(
-            'AUTO_CREATE_DRAFT_PR is not supported by the SDK; falling back to AUTO_CREATE_PR.',
-          );
         } else {
           autoPr = true;
         }
       }
 
-      const result = await createSession(client, {
-        prompt,
-        repo: normalizedRepo,
-        branch,
-        interactive: requirePlanApproval,
-        autoPr,
-        title: args?.title as string | undefined,
-      });
+      let sessionId: string;
 
-      const session = await client.session(result.id).info();
+      if (automationMode === 'AUTO_CREATE_DRAFT_PR') {
+        const restClient = getJulesRestClient();
+        const response = await restClient.request<any>('sessions', {
+          method: 'POST',
+          body: {
+            prompt,
+            sourceContext: {
+              source: `sources/github/${normalizedRepo}`,
+              githubRepoContext: { startingBranch: branch },
+            },
+            title: args?.title as string | undefined,
+            automationMode: 'AUTO_CREATE_DRAFT_PR',
+            requirePlanApproval,
+          },
+        });
+        sessionId = response.id ?? response.name?.replace(/^sessions\//, '');
+        if (!sessionId) {
+          throw new Error('Failed to parse session ID from API response');
+        }
+      } else {
+        const result = await createSession(client, {
+          prompt,
+          repo: normalizedRepo,
+          branch,
+          interactive: requirePlanApproval,
+          autoPr,
+          title: args?.title as string | undefined,
+        });
+        sessionId = result.id;
+      }
+
+      const session = await client.session(sessionId).info();
       const data = formatSession(session);
 
       const response: ToolResult = success(
@@ -93,13 +114,6 @@ const createSessionTool = defineTool({
         data,
         getSuggestedNextSteps(session),
       );
-
-      if (warnings.length > 0) {
-        response.suggestedNextSteps = [
-          ...(response.suggestedNextSteps ?? []),
-          ...warnings,
-        ];
-      }
 
       return toMcpResponse(response);
     } catch (error) {
@@ -262,11 +276,8 @@ const rejectPlanTool = defineTool({
         );
       }
       const feedback = args?.feedback as string | undefined;
-      const session: any = client.session(sessionId);
-      if (typeof session?.request !== 'function') {
-        throw new Error('SDK does not expose request() for plan rejection');
-      }
-      await session.request(`sessions/${sessionId}:rejectPlan`, {
+      const restClient = getJulesRestClient();
+      await restClient.request(`sessions/${sessionId}:rejectPlan`, {
         method: 'POST',
         body: feedback ? { feedback } : {},
       });
@@ -349,11 +360,8 @@ const cancelSessionTool = defineTool({
           failure('Session ID is required', 'CANCEL_SESSION_ERROR'),
         );
       }
-      const session: any = client.session(sessionId);
-      if (typeof session?.request !== 'function') {
-        throw new Error('SDK does not expose request() for cancellation');
-      }
-      await session.request(`sessions/${sessionId}:cancel`, {
+      const restClient = getJulesRestClient();
+      await restClient.request(`sessions/${sessionId}:cancel`, {
         method: 'POST',
         body: {},
       });

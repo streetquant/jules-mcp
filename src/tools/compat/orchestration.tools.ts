@@ -15,6 +15,7 @@ import {
   normalizeGithubRepo,
 } from './utils.js';
 import { poll } from './polling.js';
+import { getJulesRestClient } from '../../jules-client.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
@@ -23,6 +24,28 @@ import os from 'node:os';
 import path from 'node:path';
 
 const execFileAsync = promisify(execFile);
+
+async function hasPlanRejected(sessionId: string): Promise<boolean> {
+  const restClient = getJulesRestClient();
+  let pageToken: string | undefined;
+  for (let i = 0; i < 5; i += 1) {
+    const response = await restClient.request<any>(`sessions/${sessionId}/activities`, {
+      query: { pageSize: 100, pageToken },
+    });
+    const activities: any[] = response.activities ?? [];
+    if (
+      activities.some(
+        (activity) =>
+          activity.type === 'planRejected' || activity.type === 'PLAN_REJECTED',
+      )
+    ) {
+      return true;
+    }
+    pageToken = response.nextPageToken;
+    if (!pageToken) break;
+  }
+  return false;
+}
 
 function resolvePollingInterval(): number {
   const config = resolveSdkConfig();
@@ -519,15 +542,19 @@ const getSessionSummaryTool = defineTool({
       }
 
       const planApproved = activities.some((a) => a.type === 'planApproved');
-      const planRejected = activities.some(
-        (a) => (a as any).type === 'planRejected',
-      );
+      const planRejected = await hasPlanRejected(sessionId);
 
       const summary = {
         session: formatSession(info),
         activitySummary: { total: activities.length, byType: activityCounts },
         plan: planActivity ? formatActivity(planActivity) : null,
-        planStatus: planApproved ? 'approved' : planRejected ? 'rejected' : planActivity ? 'pending' : 'not_generated',
+        planStatus: planApproved
+          ? 'approved'
+          : planRejected
+            ? 'rejected'
+            : planActivity
+              ? 'pending'
+              : 'not_generated',
         latestProgress: progressActivity ? formatActivity(progressActivity) : null,
         error: errorActivity ? formatActivity(errorActivity) : null,
         latestActivity: latestActivity ? formatActivity(latestActivity) : null,
