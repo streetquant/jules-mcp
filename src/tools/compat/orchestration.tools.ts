@@ -25,6 +25,39 @@ import path from 'node:path';
 
 const execFileAsync = promisify(execFile);
 
+function looksLikeDraftNotSupported(message: string): boolean {
+  return message.includes('AUTO_CREATE_DRAFT_PR') || message.includes('automation_mode');
+}
+
+async function createSessionViaRest(params: {
+  prompt: string;
+  repo: string;
+  branch: string;
+  title?: string;
+  requirePlanApproval: boolean;
+  automationMode?: string;
+}): Promise<string> {
+  const restClient = getJulesRestClient();
+  const response = await restClient.request<any>('sessions', {
+    method: 'POST',
+    body: {
+      prompt: params.prompt,
+      sourceContext: {
+        source: `sources/github/${params.repo}`,
+        githubRepoContext: { startingBranch: params.branch },
+      },
+      title: params.title,
+      automationMode: params.automationMode,
+      requirePlanApproval: params.requirePlanApproval,
+    },
+  });
+  const sessionId = response.id ?? response.name?.replace(/^sessions\//, '');
+  if (!sessionId) {
+    throw new Error('Failed to parse session ID from API response');
+  }
+  return sessionId;
+}
+
 async function hasPlanRejected(sessionId: string): Promise<boolean> {
   const restClient = getJulesRestClient();
   let pageToken: string | undefined;
@@ -307,35 +340,53 @@ const createAndWaitTool = defineTool({
       }
 
       let sessionId: string;
-      if (automationMode === 'AUTO_CREATE_DRAFT_PR') {
-        const restClient = getJulesRestClient();
-        const response = await restClient.request<any>('sessions', {
-          method: 'POST',
-          body: {
-            prompt,
-            sourceContext: {
-              source: `sources/github/${normalizedRepo}`,
-              githubRepoContext: { startingBranch: branch },
-            },
-            title: args?.title as string | undefined,
-            automationMode: 'AUTO_CREATE_DRAFT_PR',
-            requirePlanApproval,
-          },
-        });
-        sessionId = response.id ?? response.name?.replace(/^sessions\//, '');
-        if (!sessionId) {
-          throw new Error('Failed to parse session ID from API response');
-        }
-      } else {
-        const result = await createSession(client, {
+      const title = args?.title as string | undefined;
+      try {
+        sessionId = await createSessionViaRest({
           prompt,
           repo: normalizedRepo,
           branch,
-          interactive: requirePlanApproval,
-          autoPr,
-          title: args?.title as string | undefined,
+          title,
+          requirePlanApproval,
+          automationMode,
         });
-        sessionId = result.id;
+      } catch (error) {
+        if (
+          automationMode === 'AUTO_CREATE_DRAFT_PR' &&
+          error instanceof Error &&
+          looksLikeDraftNotSupported(error.message)
+        ) {
+          try {
+            sessionId = await createSessionViaRest({
+              prompt,
+              repo: normalizedRepo,
+              branch,
+              title,
+              requirePlanApproval,
+              automationMode: 'AUTO_CREATE_PR',
+            });
+          } catch (fallbackError) {
+            const result = await createSession(client, {
+              prompt,
+              repo: normalizedRepo,
+              branch,
+              interactive: requirePlanApproval,
+              autoPr,
+              title,
+            });
+            sessionId = result.id;
+          }
+        } else {
+          const result = await createSession(client, {
+            prompt,
+            repo: normalizedRepo,
+            branch,
+            interactive: requirePlanApproval,
+            autoPr,
+            title,
+          });
+          sessionId = result.id;
+        }
       }
 
       if (!waitForCompletion) {
@@ -442,15 +493,28 @@ const quickTaskTool = defineTool({
       const normalizedRepo = normalizeGithubRepo(String(args?.repo));
       const createPr = args?.createPr !== false;
 
-      const result = await createSession(client, {
-        prompt,
-        repo: normalizedRepo,
-        branch,
-        interactive: false,
-        autoPr: createPr,
-      });
+      let sessionId: string;
+      try {
+        sessionId = await createSessionViaRest({
+          prompt,
+          repo: normalizedRepo,
+          branch,
+          title: undefined,
+          requirePlanApproval: false,
+          automationMode: createPr ? 'AUTO_CREATE_PR' : undefined,
+        });
+      } catch (error) {
+        const result = await createSession(client, {
+          prompt,
+          repo: normalizedRepo,
+          branch,
+          interactive: false,
+          autoPr: createPr,
+        });
+        sessionId = result.id;
+      }
 
-      const waitResult = await waitForSessionCompletion(client, result.id, {
+      const waitResult = await waitForSessionCompletion(client, sessionId, {
         intervalMs: resolvePollingInterval(),
         maxDurationMs: resolveMaxDurationMs(600000),
       });
@@ -489,7 +553,7 @@ const quickTaskTool = defineTool({
       }
 
       if (waitResult.value.state === 'failed') {
-        const session = client.session(result.id);
+        const session = client.session(sessionId);
         await session.activities.hydrate();
         const activities = await session.activities.select({ type: 'sessionFailed', order: 'desc', limit: 1 });
         const errorActivity = activities[0];
@@ -647,7 +711,7 @@ const syncLocalCodebaseTool = defineTool({
       autoStash: {
         type: 'boolean',
         description:
-          'If true, stashes local changes before applying and restores afterward (default: true)',
+          'If true, stashes local changes before applying and restores afterward (default: false)',
       },
       threeWay: {
         type: 'boolean',
@@ -680,7 +744,7 @@ const syncLocalCodebaseTool = defineTool({
       await runGit(repoPath, ['rev-parse', '--show-toplevel']);
 
       const allowDirty = Boolean(args?.allowDirty);
-      const autoStash = args?.autoStash !== false;
+      const autoStash = Boolean(args?.autoStash);
       stashed = false;
       stashRestoreError = null;
       if (!allowDirty) {

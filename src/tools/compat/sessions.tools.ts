@@ -13,6 +13,39 @@ import {
   type ToolResult,
 } from './utils.js';
 
+function looksLikeDraftNotSupported(message: string): boolean {
+  return message.includes('AUTO_CREATE_DRAFT_PR') || message.includes('automation_mode');
+}
+
+async function createSessionViaRest(params: {
+  prompt: string;
+  repo: string;
+  branch: string;
+  title?: string;
+  requirePlanApproval: boolean;
+  automationMode?: string;
+}): Promise<string> {
+  const restClient = getJulesRestClient();
+  const response = await restClient.request<any>('sessions', {
+    method: 'POST',
+    body: {
+      prompt: params.prompt,
+      sourceContext: {
+        source: `sources/github/${params.repo}`,
+        githubRepoContext: { startingBranch: params.branch },
+      },
+      title: params.title,
+      automationMode: params.automationMode,
+      requirePlanApproval: params.requirePlanApproval,
+    },
+  });
+  const sessionId = response.id ?? response.name?.replace(/^sessions\//, '');
+  if (!sessionId) {
+    throw new Error('Failed to parse session ID from API response');
+  }
+  return sessionId;
+}
+
 const createSessionTool = defineTool({
   name: 'jules_create_session',
   description:
@@ -74,36 +107,43 @@ const createSessionTool = defineTool({
       }
 
       let sessionId: string;
+      const title = args?.title as string | undefined;
+      const automationModeValue = automationMode || 'AUTOMATION_MODE_UNSPECIFIED';
 
-      if (automationMode === 'AUTO_CREATE_DRAFT_PR') {
-        const restClient = getJulesRestClient();
-        const response = await restClient.request<any>('sessions', {
-          method: 'POST',
-          body: {
-            prompt,
-            sourceContext: {
-              source: `sources/github/${normalizedRepo}`,
-              githubRepoContext: { startingBranch: branch },
-            },
-            title: args?.title as string | undefined,
-            automationMode: 'AUTO_CREATE_DRAFT_PR',
-            requirePlanApproval,
-          },
-        });
-        sessionId = response.id ?? response.name?.replace(/^sessions\//, '');
-        if (!sessionId) {
-          throw new Error('Failed to parse session ID from API response');
-        }
-      } else {
-        const result = await createSession(client, {
+      try {
+        sessionId = await createSessionViaRest({
           prompt,
           repo: normalizedRepo,
           branch,
-          interactive: requirePlanApproval,
-          autoPr,
-          title: args?.title as string | undefined,
+          title,
+          requirePlanApproval,
+          automationMode: automationModeValue,
         });
-        sessionId = result.id;
+      } catch (error) {
+        if (
+          automationMode === 'AUTO_CREATE_DRAFT_PR' &&
+          error instanceof Error &&
+          looksLikeDraftNotSupported(error.message)
+        ) {
+          sessionId = await createSessionViaRest({
+            prompt,
+            repo: normalizedRepo,
+            branch,
+            title,
+            requirePlanApproval,
+            automationMode: 'AUTO_CREATE_PR',
+          });
+        } else {
+          const result = await createSession(client, {
+            prompt,
+            repo: normalizedRepo,
+            branch,
+            interactive: requirePlanApproval,
+            autoPr,
+            title,
+          });
+          sessionId = result.id;
+        }
       }
 
       const session = await client.session(sessionId).info();
