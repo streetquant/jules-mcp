@@ -136,3 +136,7 @@ jules-mcp-server doctor
 # Save API key to ~/.jules/config.json
 jules-mcp-server config --key YOUR_KEY
 ```
+
+## Credits
+
+Special thanks to [David East](https://twitter.com/_davideast) for building the SDK and API on which this MCP is based.
