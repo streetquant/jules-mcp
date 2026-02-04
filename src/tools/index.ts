@@ -8,6 +8,10 @@ import reviewChangesTool from './review-changes.tool.js';
 import showDiffTool from './show-diff.tool.js';
 import queryCacheTool from './query-cache.tool.js';
 import bashOutputsTool from './bash-outputs.tool.js';
+import { compatSourceTools } from './compat/sources.tools.js';
+import { compatSessionTools } from './compat/sessions.tools.js';
+import { compatActivityTools } from './compat/activities.tools.js';
+import { compatOrchestrationTools } from './compat/orchestration.tools.js';
 
 export const allTools: JulesTool[] = [
   createSessionTool,
@@ -18,6 +22,10 @@ export const allTools: JulesTool[] = [
   showDiffTool,
   queryCacheTool,
   bashOutputsTool,
+  ...compatSourceTools,
+  ...compatSessionTools,
+  ...compatActivityTools,
+  ...compatOrchestrationTools,
 ];
 
 export const tools: JulesTool[] = allTools.filter((tool) => !tool.private);

@@ -15,6 +15,10 @@ export async function createSession(
     config.source = { github: options.repo, baseBranch: options.branch };
   }
 
+  if (options.title) {
+    config.title = options.title;
+  }
+
   const result = options.interactive
     ? await client.session(config)
     : await client.run(config);

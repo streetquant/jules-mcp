@@ -21,7 +21,7 @@ JULES_API_KEY=your_api_key node dist/cli.js
 
 ## OpenCode Integration
 
-This repo includes a project-level OpenCode config at `.opencode/opencode.json`. For global setup, add to `~/.config/opencode/opencode.json`:
+This repo includes a project-level OpenCode config at `.opencode/opencode.json`. For global setup, add to `~/.config/opencode/opencode.json` (update the command path to where you built this server):
 
 ```json
 {
@@ -29,7 +29,7 @@ This repo includes a project-level OpenCode config at `.opencode/opencode.json`.
   "mcp": {
     "jules": {
       "type": "local",
-      "command": ["node", "/home/arch/projects/autonomous-agents/jules-mcp/dist/cli.js"],
+      "command": ["node", "/path/to/your/jules-mcp/dist/cli.js"],
       "environment": {
         "JULES_API_KEY": "your_api_key"
       }
@@ -40,7 +40,7 @@ This repo includes a project-level OpenCode config at `.opencode/opencode.json`.
 
 ## Tools (SDK Parity)
 
-These are the **exact tools exposed** by this MCP server (SDK-style names only).
+These are the **SDK-parity tools** exposed by this MCP server (SDK-style names).
 
 **`create_session`**
 Creates a new Jules session or automated run (supports repoless sessions).
@@ -130,6 +130,163 @@ Example:
   }
 }
 ```
+
+## Compatibility Tools (`jules_*`)
+
+These tools restore the earlier REST-style names for compatibility. They return a structured `ToolResult` object:
+
+```
+{ success, message, data?, error?, suggestedNextSteps? }
+```
+
+**`jules_list_sources`**
+Lists all GitHub repositories connected to Jules.
+
+Parameters:
+- `pageSize` (number, optional)
+- `pageToken` (string, optional; offset)
+
+Returns: `{ sources: [...], hasMore, nextPageToken }`
+
+**`jules_get_source`**
+Gets details about a specific connected repository.
+
+Parameters:
+- `source` (string, required; `sources/github/owner/repo` or `owner/repo`)
+
+Returns: source details.
+
+**`jules_create_session`**
+Creates a new Jules session (compatibility schema).
+
+Parameters:
+- `prompt` (string, required)
+- `repo` (string, required)
+- `branch` (string, optional, default `main`)
+- `title` (string, optional)
+- `automationMode` (string, optional: `AUTOMATION_MODE_UNSPECIFIED` | `AUTO_CREATE_PR` | `AUTO_CREATE_DRAFT_PR`)
+- `requirePlanApproval` (boolean, optional)
+
+Notes:
+- `AUTO_CREATE_DRAFT_PR` falls back to `AUTO_CREATE_PR` in the SDK.
+
+**`jules_get_session`**
+Gets current status and details for a session.
+
+Parameters:
+- `sessionId` (string, required)
+
+**`jules_list_sessions`**
+Lists sessions with pagination.
+
+Parameters:
+- `pageSize` (number, optional)
+- `pageToken` (string, optional)
+
+**`jules_approve_plan`**
+Approves a pending plan.
+
+Parameters:
+- `sessionId` (string, required)
+
+**`jules_reject_plan`**
+Rejects a plan with optional feedback.
+
+Parameters:
+- `sessionId` (string, required)
+- `feedback` (string, optional)
+
+**`jules_send_message`**
+Sends a message to an active session.
+
+Parameters:
+- `sessionId` (string, required)
+- `message` (string, required)
+
+**`jules_cancel_session`**
+Cancels a running session.
+
+Parameters:
+- `sessionId` (string, required)
+
+**`jules_list_activities`**
+Lists activities in a session.
+
+Parameters:
+- `sessionId` (string, required)
+- `pageSize` (number, optional)
+- `pageToken` (string, optional)
+
+**`jules_get_latest_activity`**
+Gets the latest activity for a session.
+
+Parameters:
+- `sessionId` (string, required)
+
+**`jules_get_session_plan`**
+Gets the latest plan (if generated).
+
+Parameters:
+- `sessionId` (string, required)
+
+**`jules_wait_for_completion`**
+Blocks until the session completes or times out.
+
+Parameters:
+- `sessionId` (string, required)
+- `timeoutMs` (number, optional)
+- `pollIntervalMs` (number, optional)
+
+**`jules_wait_for_plan`**
+Blocks until a plan is generated or times out.
+
+Parameters:
+- `sessionId` (string, required)
+- `timeoutMs` (number, optional)
+
+**`jules_create_and_wait`**
+Creates a session and optionally waits for completion.
+
+Parameters:
+- `prompt` (string, required)
+- `repo` (string, required)
+- `branch` (string, optional)
+- `title` (string, optional)
+- `automationMode` (string, optional)
+- `waitForCompletion` (boolean, optional, default true)
+- `timeoutMs` (number, optional)
+- `requirePlanApproval` (boolean, optional)
+
+**`jules_quick_task`**
+Creates a session with defaults and waits for completion.
+
+Parameters:
+- `prompt` (string, required)
+- `repo` (string, required)
+- `branch` (string, optional)
+- `createPr` (boolean, optional, default true)
+
+**`jules_get_session_summary`**
+Returns a combined summary (session + activities + plan + errors).
+
+Parameters:
+- `sessionId` (string, required)
+
+**`jules_sync_local_codebase`**
+Applies the latest Jules diff to a local git working tree.
+
+Parameters:
+- `sessionId` (string, required)
+- `repoPath` (string, optional, default `cwd`)
+- `activityId` (string, optional)
+- `file` (string, optional)
+- `dryRun` (boolean, optional)
+- `allowDirty` (boolean, optional)
+- `threeWay` (boolean, optional)
+
+Notes:
+- Uses `git apply` under the hood. Requires a git repo.
+- By default refuses to apply on a dirty working tree unless `allowDirty=true`.
 
 ## Hidden Tool (Not Listed in MCP)
 

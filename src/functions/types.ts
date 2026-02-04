@@ -131,6 +131,7 @@ export interface CreateSessionOptions {
   branch?: string;
   interactive?: boolean;
   autoPr?: boolean;
+  title?: string;
 }
 
 export interface CreateSessionResult {
